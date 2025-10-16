@@ -1,0 +1,79 @@
+
+```{r}
+library(tidyverse)
+```
+
+Read in dataset
+```{r}
+HEI<-read.csv("../dataset/HEI_final_052824.csv")
+```
+
+Filter to just SWPA data
+```{r}
+HEI_SWPA<-HEI%>%
+  filter(Region == "SWPA")
+```
+
+```{r}
+# List of columns to analyze
+columns <- c("Methane", "Ethane", "Propane", "Benzene", "Toluene", "Ethylbenzene", "Xylenes..total",
+             "Oil.and.grease","Methylene.blue.active.substances", "Alkalinity..total",
+             "Alkalinity..bicarbonate", "Alkalinity..carbonate", "Bromide..total",
+             "Calcium..total", "Chloride", "Potassium..total", "Magnesium..total", "Sodium..total",
+             "Sulfate..total", "Solids..total.dissolved", "pH", "Arsenic..total", "Barium..total",
+             "Iron..total", "Manganese..total", "Strontium..total")
+
+# Function to identify censor codes "not censored" ("nc") or "greater than" ("gt"), indicating the sample was above the detection limit
+count_nc_gt <-function(name) {
+  cc_column <- paste0(name, "_cc")
+  return(sum(HEI_SWPA[[cc_column]] %in% c("nc", "gt"), na.rm = TRUE))
+}
+
+# Count non-NA values for each column
+non_na_counts <- sapply(HEI_SWPA[columns], function(col) sum(!is.na(col)))
+nc_gt_counts <-sapply(columns, count_nc_gt)
+
+
+# Create a data frame for the result
+tableS1 <- data.frame(Species = columns, Non_NA = non_na_counts, Non_cens = nc_gt_counts)
+
+# Print the result
+print(tableS1)
+```
+
+Add in MCL/SMCL values
+```{r}
+# Define EPA MCL/SMCL values
+mcl_values <- c("Methane" = 10, "Benzene" = 0.005, "Toluene" = 1, "Ethylbenzene" = 0.7, 
+                "Xylenes..total" = 10, "Chloride" = 250, "Sulfate..total" = 250, 
+                "Solids..total.dissolved" = 500, "Arsenic..total" = 0.01, 
+                "Barium..total" = 2, "Iron..total" = 0.3, "Manganese..total" = 0.05)
+
+# Add the EPA MCL/SMCL column
+tableS1$EPA_MCL_SMCL <- mcl_values[result_df$Species]
+
+# Handle ug/L for BTEX
+mcl_values_working <- c("Methane" = 10, "Benzene" = 5, "Toluene" = 1000, "Ethylbenzene" = 700, 
+                "Xylenes..total" = 10000, "Chloride" = 250, "Sulfate..total" = 250, 
+                "Solids..total.dissolved" = 500, "Arsenic..total" = 0.01, 
+                "Barium..total" = 2, "Iron..total" = 0.3, "Manganese..total" = 0.05)
+
+# Create a function to count rows exceeding MCL/SMCL values
+count_exceeding <- function(name, mcl_value) {
+  if (is.na(mcl_value)) return(NA_integer_)
+  cc_column <- paste0(name, "_cc")
+  return(sum(HEI_SWPA[[name]] > mcl_value & (HEI_SWPA[[cc_column]] %in% c("nc", "gt")), na.rm = TRUE))
+}
+
+# Calculate the exceeding counts using mcl_values_working
+exceeding_counts <- sapply(columns, function(col) count_exceeding(col, mcl_values_working[col]))
+
+
+# Add the exceeding counts column
+tableS1$Exceeding_Count <- exceeding_counts
+```
+
+Save csv
+```{r}
+write.csv(tableS1, "TableS1.csv")
+```

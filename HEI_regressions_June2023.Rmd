@@ -1,0 +1,800 @@
+Clear if needed
+```{r}
+rm(list = ls(all.names = TRUE))
+```
+
+load packages
+```{r}
+library(tidyverse)
+```
+
+Load dataset
+```{r}
+HEI<-read.csv("../dataset/HEI_final_052824.csv")
+```
+
+Define variables
+```{r}
+#Modify the data to include variables for UOG wells within 1km, 3km, and create a censor code for 
+HEI <- HEI %>%
+  mutate(UOG_1km = ifelse(num_uncon_well_1km >= 1, 1, 0),
+         UOG_3km = ifelse(num_uncon_well_3km >= 1, 1, 0),
+         Density_1km = num_uncon_well_1km,
+         Density_3km = num_uncon_well_3km,
+         Distance = UCwell_distance_m,
+         #Spill violations
+         Spill_1km = ifelse(num_spills_1km >= 1, 1, 0),
+         Spill_3km = ifelse(num_spills_3km >= 1, 1, 0),
+         Spill_density_1km = num_spills_1km,
+         Spill_density_3km = num_spills_3km,
+         Spill_distance = spill_distance_m
+         )%>%
+  #Add 0.0001 to all Sr samples to fix issues with a handful of samples where [Sr]=0 in historical samples
+  mutate(Strontium_mod = Strontium..total + 0.0001)
+
+#Convert to log
+HEI$log_Ba <- log(HEI$Barium..total)
+HEI$log_Sr <- log(HEI$Strontium_mod)
+
+HEI_SWPA<-HEI%>%
+  filter(Region == "SWPA")
+
+HEI_NEPA <- HEI%>%
+  filter(Region != "SWPA" & Region != "NWPA")
+```
+
+Regressions-just UOG wells
+```{r}
+#Create a named list of formula strings for each y variable
+y_names <- c("log_Ba", "log_Sr")
+x_names <- c("Density_1km", "Distance")
+datasets <- list("All_PA" = HEI, "SWPA" = HEI_SWPA, "NEPA" = HEI_NEPA)
+
+#Initialize an empty list to store the results for each y variable
+fullPA_results_list <- list()
+
+#Run a regression for each x variable and extract coefficients, standard errors, and p-values
+for (y_var in y_names) {
+  for (dataset_name in names(datasets)) {
+    dataset <- datasets[[dataset_name]]
+    
+    fullPA_results <- lapply(x_names, function(x_var) {
+      model <- lm(paste0(y_var, " ~ ", x_var), data = dataset, 
+                  na.action = na.exclude)
+      coeffs <- coef(model)
+      se <- summary(model)$coefficients[, 2]
+      p_values <- summary(model)$coefficients[, 4]
+      data.frame(y_var = y_var, 
+                 x_var = x_var, 
+                 Region = dataset_name, 
+                 coeffs = coeffs[-1], 
+                 se = se[-1], 
+                 p_values = p_values[-1])
+    })
+    
+#Combine the results into a single data frame and add it to the list of results for each y variable and dataset
+    fullPA_results_list[[paste0(y_var, "_", dataset_name)]] <- bind_rows(fullPA_results)
+  }
+}
+
+#Combine the results for each y variable and dataset into a single data frame
+fullPA_results <- bind_rows(fullPA_results_list)
+
+#Use dplyr to arrange the results by dataset, y variable, and x variable
+fullPA_results_UOGD <- fullPA_results %>% 
+  arrange(Region, y_var, x_var)%>%
+  mutate(Sig_95 = ifelse(p_values < 0.05, 1, 0),
+         Sig_99 = ifelse(p_values < 0.01, 1, 0),
+         Sig_99.5 = ifelse(p_values < 0.005, 1, 0),
+         coef_min = coeffs - se,
+         coef_max = coeffs + se)
+
+fullPA_results_UOGD
+
+#write.csv(fullPA_results_UOGD, "fullPA_results_UOGD_Jun23.csv")
+```
+
+Table A4: Regressions-UOG wells and spills
+```{r}
+#Create a named list of formula strings for each y variable
+y_names <- c("log_Ba", "log_Sr")
+x_names <- c("Density_1km", "Density_3km", "Distance",
+             "Spill_density_1km", "Spill_density_3km", "Spill_distance")
+datasets <- list("All_PA" = HEI, "SWPA" = HEI_SWPA, "NEPA" = HEI_NEPA)
+
+#Initialize an empty list to store the results for each y variable
+fullPA_results_list <- list()
+
+#Run a regression for each x variable and extract coefficients, standard errors, and p-values
+for (y_var in y_names) {
+  for (dataset_name in names(datasets)) {
+    dataset <- datasets[[dataset_name]]
+    
+    fullPA_results <- lapply(x_names, function(x_var) {
+      model <- lm(paste0(y_var, " ~ ", x_var), data = dataset, 
+                  na.action = na.exclude)
+      coeffs <- coef(model)
+      se <- summary(model)$coefficients[, 2]
+      p_values <- summary(model)$coefficients[, 4]
+      data.frame(y_var = y_var, 
+                 x_var = x_var, 
+                 Region = dataset_name, 
+                 coeffs = coeffs[-1], 
+                 se = se[-1], 
+                 p_values = p_values[-1])
+    })
+    
+#Combine the results into a single data frame and add it to the list of results for each y variable and dataset
+    fullPA_results_list[[paste0(y_var, "_", dataset_name)]] <- bind_rows(fullPA_results)
+  }
+}
+
+#Combine the results for each y variable and dataset into a single data frame
+fullPA_results <- bind_rows(fullPA_results_list)
+
+#Use dplyr to arrange the results by dataset, y variable, and x variable
+fullPA_results_violations <- fullPA_results %>% 
+  arrange(Region, y_var, x_var)%>%
+  mutate(Sig_95 = ifelse(p_values < 0.05, 1, 0),
+         Sig_99 = ifelse(p_values < 0.01, 1, 0),
+         Sig_99.5 = ifelse(p_values < 0.005, 1, 0),
+         coef_min = coeffs - se,
+         coef_max = coeffs + se)
+
+#write.csv(fullPA_results_violations, "fullPA_results_violations_Jun23.csv")
+```
+
+With concentration
+```{r}
+#Add concentration in to the calculation
+fullPA_results_violations<-fullPA_results_violations%>%
+  mutate(avg_conc = case_when(y_var == "log_Ba" &
+                    Region == "All_PA" ~ mean(HEI$Barium..total,
+                                na.rm = T),
+                              y_var == "log_Sr" &
+                    Region == "All_PA" ~ mean(HEI$Strontium..total,
+                                na.rm = T),
+                              y_var == "log_Ba" &
+                    Region == "NEPA" ~ mean(HEI_NEPA$Barium..total,
+                                na.rm = T),
+                              y_var == "log_Sr" &
+                    Region == "NEPA" ~ mean(HEI_NEPA$Strontium..total,
+                                na.rm = T),
+                              y_var == "log_Ba" &
+                    Region == "SWPA" ~ mean(HEI_SWPA$Barium..total,
+                                na.rm = T),
+                              y_var == "log_Sr" &
+                    Region == "SWPA" ~ mean(HEI_SWPA$Strontium..total,
+                                na.rm = T)),
+         avg_density = case_when(Region == "All_PA" ~
+                              mean(HEI$num_uncon_well_1km,
+                                na.rm = T),
+                              Region == "NEPA" ~ mean(HEI_NEPA$num_uncon_well_1km,
+                                na.rm = T),
+                              Region == "SWPA" ~ mean(HEI_SWPA$num_uncon_well_1km,
+                                na.rm = T)
+                              ),
+          avg_spill_density = case_when(Region == "All_PA" ~
+                                           mean(HEI$num_spills_1km,
+                                na.rm = T),
+                              Region == "NEPA" ~ mean(HEI_NEPA$num_spills_1km,
+                                na.rm = T),
+                              Region == "SWPA" ~ mean(HEI_SWPA$num_spills_1km,
+                                na.rm = T)
+                              ),
+      avg_impact = avg_conc * (exp(coeffs*avg_density) - 1),
+      avg_impact_min = avg_conc * (exp(coef_min*avg_density) - 1),
+      avg_impact_max = avg_conc * (exp(coef_max*avg_density) - 1),
+      avg_spill_impact = avg_conc * (exp(coeffs*avg_spill_density) - 1),
+      avg_spill_impact_min = avg_conc * (exp(coef_min*avg_spill_density) - 1),
+      avg_spill_impact_max = avg_conc * (exp(coef_max*avg_spill_density) - 1)
+         )
+
+
+#Plot for UOG wells, spills
+#Plot coefficients with error bars for each x variable
+ggplot(fullPA_results_violations%>%
+         filter(x_var == "Density_1km"), 
+       aes(x = y_var, y = (avg_impact*1000), ymin = (avg_impact_min*1000), 
+                             ymax = (avg_impact_max*1000), color = Region, 
+                             shape = factor(Sig_95))) +
+  geom_point(position = position_dodge(width = 0.5)) +
+  geom_hline(yintercept = 0) +
+  geom_errorbar(width = 0.2, position = position_dodge(width = 0.5)) +
+  scale_shape_manual(values = c("0" = 21, "1" = 16)) +
+  #facet_wrap(~y_var, scales = "free") +
+  xlab("Species") +
+  ylab("Increase in concentration (ug/L)") +
+  theme_classic()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+#Just spills_1km
+#Plot coefficients with error bars for each x variable
+ggplot(fullPA_results_violations%>%
+         filter(x_var == "Spill_density_1km"), 
+       aes(x = y_var, y = (avg_spill_impact*1000), 
+           ymin = (avg_spill_impact_min*1000), 
+                             ymax = (avg_spill_impact_max*1000), color = Region, 
+                             shape = factor(Sig_95))) +
+  geom_point(position = position_dodge(width = 0.5)) +
+  geom_hline(yintercept = 0) +
+  geom_errorbar(width = 0.2, position = position_dodge(width = 0.5)) +
+  scale_shape_manual(values = c("0" = 21, "1" = 16)) +
+  #facet_wrap(~y_var, scales = "free") +
+  xlab("Species") +
+  ylab("Increase in concentration (ug/L)") +
+  theme_classic()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+Plot concentration increases for spills and UOG wells
+```{r}
+#Calculate the correct impact for the respective UOG feature
+filt_fullPA_results_violations<-fullPA_results_violations%>%
+         filter(x_var %in% c("Density_1km", "Spill_density_1km"),
+                Region == "All_PA")%>%
+  mutate(
+    impact = case_when(
+      x_var == "Density_1km" ~ avg_impact,
+      x_var == "Spill_density_1km" ~ avg_spill_impact
+    ),
+    impact_min = case_when(
+      x_var == "Density_1km" ~ avg_impact_min,
+      x_var == "Spill_density_1km" ~ avg_spill_impact_min
+    ),
+    impact_max = case_when(
+      x_var == "Density_1km" ~ avg_impact_max,
+      x_var == "Spill_density_1km" ~ avg_spill_impact_max
+    )
+  )
+
+ggplot(filt_fullPA_results_violations, 
+       aes(x = x_var, y = (impact*1000), 
+                            ymin = (impact_min*1000), 
+                             ymax = (impact_max*1000), color = y_var, 
+                             shape = factor(Sig_95))) +
+  geom_point(position = position_dodge(width = 0.5),
+             size = 5) +
+  geom_hline(yintercept = 0) +
+  geom_errorbar(width = 0.2, position = position_dodge(width = 0.5)) +
+  scale_shape_manual(values = c("0" = 21, "1" = 16)) +
+  scale_color_manual(values = c("Gray8", "Gray60"))+
+  #facet_wrap(~y_var, scales = "free") +
+  xlab("Species") +
+  ylab("Increase in concentration (µg/L)") +
+  theme_classic()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+fullPA_results_violations<-fullPA_results_violations%>%
+  mutate(impact_1unit = (exp(coeffs)-1) * avg_conc,
+         min_impact_1unit = (exp(coef_min)-1) * avg_conc,
+         max_impact_1unit = (exp(coef_max)-1) * avg_conc,
+         impact_1unit_ugL = impact_1unit*1000)
+
+fullPA_filt_1unit<-fullPA_results_violations%>%
+    filter(x_var %in% c("Density_1km", "Spill_density_1km"),
+                Region == "All_PA")
+
+#Alternative plot: do per 1-unit increase
+ggplot(fullPA_results_violations%>%
+         filter(Region == "All_PA" & x_var %in% 
+                  c("Density_1km", "Spill_density_1km")), 
+       aes(x = x_var, y = (impact_1unit*1000), 
+                            ymin = (min_impact_1unit*1000), 
+                             ymax = (max_impact_1unit*1000), color = y_var, 
+                             shape = factor(Sig_95))) +
+  geom_point(position = position_dodge(width = 0.5),
+             size = 5) +
+  geom_hline(yintercept = 0) +
+  geom_errorbar(width = 0.2, position = position_dodge(width = 0.5)) +
+  scale_shape_manual(values = c("0" = 21, "1" = 16)) +
+  scale_color_manual(values = c("Gray8", "Gray60"))+
+  #facet_wrap(~y_var, scales = "free") +
+  xlab("Species") +
+  ylab("Increase in concentration (µg/L)") +
+  theme_classic()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "none")
+
+#ggsave("1unitincrease.pdf", width = 5.5, height = 4)
+```
+
+ELEVATION
+Correlations with variables, elevation accounted for
+Table A5: Statewide UOG well and spill relationships, considering only higher-elevation wellpads or spills
+
+Define variables
+```{r}
+#Modify the data to include variables for UOG wells within 1km, 3km, and create a censor code for 
+HEI_E <- HEI %>%
+  mutate(Density_1km = num_uncon_well_1km_E,
+         Spill_density_1km = num_spills_1km_E,
+         Distance = UCwell_distance_m_E,
+         Spill_distance = spill_distance_m_E)
+
+HEI_E_SWPA<-HEI_E%>%
+  filter(Region == "SWPA")
+
+HEI_E_NEPA<-HEI_E%>%
+  filter(Region != "SWPA" & Region != "NWPA")
+```
+
+Run regressions
+```{r}
+# Create a named list of formula strings for each y variable
+y_names <- c("log_Ba", "log_Sr")
+x_names <- c("Density_1km", "Distance",
+             "Spill_density_1km", "Spill_distance"
+             )
+datasets <- list("All_PA" = HEI_E, "SWPA" = HEI_E_SWPA, "NEPA" = HEI_E_NEPA)
+
+# Initialize an empty list to store the results for each y variable
+fullPA_results_list <- list()
+
+# Run a regression for each x variable and extract coefficients, standard errors, and p-values
+for (y_var in y_names) {
+  for (dataset_name in names(datasets)) {
+    dataset <- datasets[[dataset_name]]
+    
+    fullPA_results <- lapply(x_names, function(x_var) {
+      model <- lm(paste0(y_var, " ~ ", x_var), data = dataset, 
+                  na.action = na.exclude)
+      coeffs <- coef(model)
+      se <- summary(model)$coefficients[, 2]
+      p_values <- summary(model)$coefficients[, 4]
+      cat("x_var:", x_var, "\n")
+      cat("dataset_name:", dataset_name, "\n")
+      cat("coeffs:", coeffs, "\n")
+      cat("se:", se, "\n")
+      cat("p_values:", p_values, "\n")
+      data.frame(y_var = y_var, 
+                 x_var = x_var, 
+                 Region = dataset_name, 
+                 coeffs = coeffs[-1], 
+                 se = se[-1], 
+                 p_values = p_values[-1])
+    })
+    
+    # Combine the results into a single data frame and add it to the list of results for each y variable and dataset
+    fullPA_results_list[[paste0(y_var, "_", dataset_name)]] <- bind_rows(fullPA_results)
+  }
+}
+
+# Combine the results for each y variable and dataset into a single data frame
+fullPA_results <- bind_rows(fullPA_results_list)
+
+# Use dplyr to arrange the results by dataset, y variable, and x variable
+fullPA_results_violations_E <- fullPA_results %>% 
+  arrange(Region, y_var, x_var)%>%
+  mutate(Sig_95 = ifelse(p_values < 0.05, 1, 0),
+         Sig_99 = ifelse(p_values < 0.01, 1, 0),
+         Sig_99.5 = ifelse(p_values < 0.005, 1, 0))
+
+fullPA_results_violations_E
+
+#write.csv(fullPA_results_violations, "fullPA_results_violations_E_Jun23.csv")
+```
+
+##################################################################
+ADD IN FIXED EFFECTS
+```{r}
+fixed_samples<-HEI%>%
+  mutate(Date_Sampled = as.Date(Date.Sampled),
+         month = format(Date_Sampled, "%m"), 
+         year = format(Date_Sampled, "%Y"),
+         UOG_1km = case_when(num_uncon_well_1km >= 1 ~ 0,
+                             TRUE ~ 1),
+         conwell_1km = case_when(num_con_well_1km_NEW >= 1 ~ 0,
+                                TRUE ~ 1),
+         coalmining_1km = case_when(Coal_mine_distance_m <= 1000 ~ 0,
+                                TRUE ~ 1),
+         anticline_1km = case_when(Anticline_distance_m <= 1000 ~ 0,
+                                  TRUE ~ 1),
+         stream_100m = case_when(Stream_distance_m <= 100 ~ 0,
+                               TRUE ~ 1),
+         highway_1km = case_when(Highway_distance_m <= 1000 ~ 0,
+                                 TRUE ~ 1),
+         fault_1km = case_when(Fault_distance_m <= 1000 ~ 0,
+                                 TRUE ~ 1),
+         Bedrock = LITH1,
+         Season = case_when(month %in% c("01", "02", "12") ~ "Winter",
+                            month %in% c("03", "04", "05") ~ "Spring",
+                            month %in% c("06", "07", "08") ~ "Summer",
+                            month %in% c("09", "10", "11") ~ "Fall"),
+         Winter = case_when(month %in% c("01", "02", "12") ~ 0,
+                            TRUE ~ 1),
+         Spring = case_when(month %in% c("03", "04", "05") ~ 0,
+                            TRUE ~ 1),
+         Summer = case_when(month %in% c("06", "07", "08") ~ 0,
+                            TRUE ~ 1),
+         Fall = case_when(month %in% c("09", "10", "11") ~ 0,
+                            TRUE ~ 1),
+         s2010 = case_when(year == "2010" ~ 0,
+                            TRUE ~ 1),
+         s2011 = case_when(year == "2011" ~ 0,
+                            TRUE ~ 1),
+         s2012 = case_when(year == "2012" ~ 0,
+                            TRUE ~ 1),
+         s2013 = case_when(year == "2013" ~ 0,
+                            TRUE ~ 1),
+         s2014 = case_when(year == "2014" ~ 0,
+                            TRUE ~ 1),
+         s2015 = case_when(year == "2015" ~ 0,
+                            TRUE ~ 1),
+         s2016 = case_when(year == "2016" ~ 0,
+                            TRUE ~ 1),
+         s2017 = case_when(year == "2017" ~ 0,
+                            TRUE ~ 1),
+         s2018 = case_when(year == "2018" ~ 0,
+                            TRUE ~ 1)
+         )
+
+#Subset of just relevant variables
+fixed_select<-fixed_samples%>%
+  select(Region, 
+         #y vars
+         log_Ba, log_Sr, 
+         #x variables
+         Density_1km, Distance,
+         Spill_density_1km, Spill_distance,
+         #Fixed effects
+         conwell_1km, coalmining_1km, anticline_1km,
+                        stream_100m, highway_1km, fault_1km,
+                         LITH1, Season)
+
+fixed_SWPA<-fixed_samples%>%
+  filter(Region == "SWPA")
+
+fixed_NEPA<-fixed_samples%>%
+  filter(Region != "SWPA" & Region != "NWPA")
+```
+
+Run the regression for just UOG wells
+```{r}
+#Create a list for each y variable, x variable, and dataset
+y_names <- c("log_Ba", "log_Sr")
+x_names <- c("Density_1km", "Density_3km", "Distance")
+datasets <- list("All_PA" = fixed_samples, "SWPA" = fixed_SWPA, 
+                 "NEPA" = fixed_NEPA)
+
+#Define the names of the fixed effects
+fixed_effect_names <- c("conwell_1km", "coalmining_1km", "anticline_1km",
+                        "stream_100m", "highway_1km", "fault_1km",
+                         "Bedrock", "Season")
+
+# Initialize an empty list to store results for each combination of y variable, x variable, and dataset
+fullPA_results_list <- list()
+
+#Loop over each y variable and dataset
+#Run a regression for each x variable and extract coefficients, standard errors, and p-values
+for (y_var in y_names) {
+  for (dataset_name in names(datasets)) {
+    dataset <- datasets[[dataset_name]]
+
+    fullPA_results <- lapply(x_names, function(x_var) {
+#Construct the formula including fixed effects
+      formula_str <- paste0(y_var, " ~ ", x_var, " + ", 
+                       paste0(fixed_effect_names, collapse = " + "), " - 1")
+      formula_obj <- as.formula(formula_str)
+
+#Try running the model, and return an empty data frame if an error occurs
+      result <- tryCatch({
+        model <- lm(formula_obj, data = dataset)
+        coeffs <- coef(model)
+        se <- summary(model)$coefficients[, 2]
+        p_values <- summary(model)$coefficients[, 4]
+        
+#Create a data frame with one row for each x-/y-var combination
+        data.frame(y_var = y_var, 
+                   x_var = x_var, 
+                   Region = dataset_name, 
+                   coeffs_x_var = coeffs[x_var], 
+                   se_x_var = se[x_var], 
+                   p_values_x_var = p_values[x_var],
+                   setNames(rep(list(NA_real_), length(fixed_effect_names)),
+                            paste0("coef_", fixed_effect_names)),
+                   setNames(rep(list(NA_real_), length(fixed_effect_names)),
+                            paste0("se_", fixed_effect_names)),
+                   setNames(rep(list(NA_real_), length(fixed_effect_names)),
+                            paste0("p_values_", fixed_effect_names)))
+        
+      }, error = function(e) {
+        message(paste0("Error with y_var=", y_var, ", x_var=", x_var, ",
+                       dataset_name=", dataset_name))
+        data.frame(y_var = character(), 
+                   x_var = character(), 
+                   Region = character(), 
+                   coeffs_x_var = numeric(), 
+                   se_x_var = numeric(), 
+                   p_values_x_var = numeric(),
+                   setNames(rep(list(NA_real_), length(fixed_effect_names)), 
+                            paste0("coef_", fixed_effect_names)),
+                   setNames(rep(list(NA_real_), length(fixed_effect_names)), 
+                            paste0("se_", fixed_effect_names)),
+                   setNames(rep(list(NA_real_), length(fixed_effect_names)), 
+                            paste0("p_values_", fixed_effect_names)))
+      })
+      
+#Add columns for the coefficients, standard errors, and p-values for each fixed effect
+      for (fe_name in fixed_effect_names) {
+        result[paste0("coef_", fe_name)] <- coeffs[fe_name]
+        result[paste0("se_", fe_name)] <- se[fe_name]
+        result[paste0("p_values_", fe_name)] <- p_values[fe_name]
+      }
+      
+      result
+    })
+
+#Combine the results into a single data frame and add it to the list of results for each y variable and dataset
+fullPA_results_list[[paste0(y_var, "_", dataset_name)]] <- bind_rows(fullPA_results)
+  }
+}
+
+#Combine the results for each y variable and dataset into a single data frame
+fullPA_results_FE <- bind_rows(fullPA_results_list)
+
+#Use dplyr to arrange the results by dataset, y variable, and x variable
+fullPA_results_UOGD_FE <- fullPA_results_FE %>% 
+  arrange(Region, y_var, x_var)%>%
+  mutate(Sig_95 = ifelse(p_values_x_var < 0.05, 1, 0),
+         Sig_99 = ifelse(p_values_x_var < 0.01, 1, 0),
+         Sig_99.5 = ifelse(p_values_x_var < 0.005, 1, 0))
+
+#write.csv(fullPA_results_UOGD_FE, "fullPA_results_UOGD_FE.csv")
+```
+
+Table A6: Include spill violations in FE calculation too
+```{r}
+#Create a list for each y variable, x variable, and dataset
+y_names <- c("log_Ba", "log_Sr")
+x_names <- c("Density_1km", "Distance",
+             "Spill_density_1km", "Spill_distance")
+datasets <- list("All_PA" = fixed_samples, "SWPA" = fixed_SWPA, 
+                 "NEPA" = fixed_NEPA)
+
+#Define the names of the fixed effects
+fixed_effect_names <- c("conwell_1km", "coalmining_1km", "anticline_1km",
+                        "stream_100m", "highway_1km", "fault_1km",
+                        "Bedrock", "Season")
+
+#Initialize an empty list to store results for each combination of y variable, x variable, and dataset
+fullPA_results_list <- list()
+
+#Loop over each y variable and dataset
+#Run a regression for each x variable and extract coefficients, standard errors, and p-values
+for (y_var in y_names) {
+  for (dataset_name in names(datasets)) {
+    dataset <- datasets[[dataset_name]]
+
+    fullPA_results <- lapply(x_names, function(x_var) {
+#Construct the formula including fixed effects
+      formula_str <- paste0(y_var, " ~ ", x_var, " + ", 
+                            paste0(fixed_effect_names, collapse = " + "), 
+                            " - 1")
+      formula_obj <- as.formula(formula_str)
+
+#Try running the model, and return an empty data frame if an error occurs
+      result <- tryCatch({
+        model <- lm(formula_obj, data = dataset)
+        coeffs <- coef(model)
+        se <- summary(model)$coefficients[, 2]
+        p_values <- summary(model)$coefficients[, 4]
+        
+#Create a data frame with one row for each x-/y-var combination
+        data.frame(y_var = y_var, 
+                   x_var = x_var, 
+                   Region = dataset_name, 
+                   coeffs_x_var = coeffs[x_var], 
+                   se_x_var = se[x_var], 
+                   p_values_x_var = p_values[x_var],
+                   setNames(rep(list(NA_real_), length(fixed_effect_names)),
+                            paste0("coef_", fixed_effect_names)),
+                   setNames(rep(list(NA_real_), length(fixed_effect_names)),
+                            paste0("se_", fixed_effect_names)),
+                   setNames(rep(list(NA_real_), length(fixed_effect_names)),
+                            paste0("p_values_", fixed_effect_names)))
+        
+      }, error = function(e) {
+        message(paste0("Error with y_var=", y_var, ", x_var=", x_var, ",
+                       dataset_name=", dataset_name))
+        data.frame(y_var = character(), 
+                   x_var = character(), 
+                   Region = character(), 
+                   coeffs_x_var = numeric(), 
+                   se_x_var = numeric(), 
+                   p_values_x_var = numeric(),
+                   setNames(rep(list(NA_real_), length(fixed_effect_names)),
+                            paste0("coef_", fixed_effect_names)),
+                   setNames(rep(list(NA_real_), length(fixed_effect_names)),
+                            paste0("se_", fixed_effect_names)),
+                   setNames(rep(list(NA_real_), length(fixed_effect_names)),
+                            paste0("p_values_", fixed_effect_names)))
+      })
+      
+#Add columns for the coefficients, standard errors, and p-values for each fixed effect
+      for (fe_name in fixed_effect_names) {
+        result[paste0("coef_", fe_name)] <- coeffs[fe_name]
+        result[paste0("se_", fe_name)] <- se[fe_name]
+        result[paste0("p_values_", fe_name)] <- p_values[fe_name]
+      }
+      
+      result
+    })
+
+#Combine the results into a single data frame and add it to the list of results for each y variable and dataset
+fullPA_results_list[[paste0(y_var, "_", dataset_name)]] <- bind_rows(fullPA_results)
+  }
+}
+
+#Combine the results for each y variable and dataset into a single data frame
+fullPA_results_FE <- bind_rows(fullPA_results_list)
+
+
+#Use dplyr to arrange the results by dataset, y variable, and x variable
+fullPA_results_FE <- fullPA_results_FE %>% 
+  arrange(Region, y_var, x_var)%>%
+  mutate(Sig_95 = ifelse(p_values_x_var < 0.05, 1, 0),
+         Sig_99 = ifelse(p_values_x_var < 0.01, 1, 0),
+         Sig_99.5 = ifelse(p_values_x_var < 0.005, 1, 0))
+
+#write.csv(fullPA_results_FE, "fullPA_results_violations_FE_May24.csv")
+```
+
+Table A7: display importance of other variables
+```{r}
+#PA wide: fixed effects calculation based on 1km radius
+#Run regressions for Ba, Sr
+Ba_rad_1km<-lm(log_Ba ~ Density_1km + conwell_1km +
+             coalmining_1km +  anticline_1km + stream_100m +
+             highway_1km + fault_1km + Bedrock + Season - 1,
+    data = fixed_samples)
+
+summary(Ba_rad_1km)
+
+
+Sr_rad_1km<-lm(log_Sr ~ Density_1km + conwell_1km +
+             coalmining_1km +  anticline_1km + stream_100m +
+             highway_1km + fault_1km + Bedrock +Season - 1, 
+             data = fixed_samples)
+
+Sr_rad_1km
+
+#Compile results
+fe_rad_1km<-data.frame(species = c("Ba", "Ba", "Ba","Ba", "Ba", "Ba", "Ba",
+                                   "Sr", "Sr","Sr", "Sr", "Sr","Sr", "Sr"),
+                      var = c("UOG", "COG", "CM", "Ant", "Str", "Hway", 
+                              "Flt", "UOG", "COG", "CM", "Ant", "Str",
+                              "Hway", "Flt"),
+                       conc = c(mean(fixed_samples$Barium..total,
+                                     na.rm = T),
+                                mean(fixed_samples$Barium..total,
+                                     na.rm = T),
+                                mean(fixed_samples$Barium..total,
+                                     na.rm = T),
+                                mean(fixed_samples$Barium..total,
+                                     na.rm = T),
+                                mean(fixed_samples$Barium..total,
+                                     na.rm = T),
+                                mean(fixed_samples$Barium..total,
+                                     na.rm = T),
+                                mean(fixed_samples$Barium..total,
+                                     na.rm = T),
+                                mean(fixed_samples$Strontium..total,
+                                     na.rm = T),
+                                mean(fixed_samples$Strontium..total,
+                                     na.rm = T),
+                                mean(fixed_samples$Strontium..total,
+                                     na.rm = T),
+                                mean(fixed_samples$Strontium..total,
+                                     na.rm = T),
+                                mean(fixed_samples$Strontium..total,
+                                     na.rm = T),
+                                mean(fixed_samples$Strontium..total,
+                                     na.rm = T),
+                                mean(fixed_samples$Strontium..total,
+                                     na.rm = T)),
+                       coef = c(-summary(Ba_rad_1km)$coefficients[1,1],
+                                -summary(Ba_rad_1km)$coefficients[2,1],
+                                -summary(Ba_rad_1km)$coefficients[3,1],
+                                -summary(Ba_rad_1km)$coefficients[4,1],
+                                -summary(Ba_rad_1km)$coefficients[5,1],
+                                -summary(Ba_rad_1km)$coefficients[6,1],
+                                -summary(Ba_rad_1km)$coefficients[7,1],
+                                -summary(Sr_rad_1km)$coefficients[1,1],
+                                -summary(Sr_rad_1km)$coefficients[2,1],
+                                -summary(Sr_rad_1km)$coefficients[3,1],
+                                -summary(Sr_rad_1km)$coefficients[4,1],
+                                -summary(Sr_rad_1km)$coefficients[5,1],
+                                -summary(Sr_rad_1km)$coefficients[6,1],
+                                -summary(Sr_rad_1km)$coefficients[7,1]
+                                ),
+                      stderr =c(-summary(Ba_rad_1km)$coefficients[1,2],
+                                -summary(Ba_rad_1km)$coefficients[2,2],
+                                -summary(Ba_rad_1km)$coefficients[3,2],
+                                -summary(Ba_rad_1km)$coefficients[4,2],
+                                -summary(Ba_rad_1km)$coefficients[5,2],
+                                -summary(Ba_rad_1km)$coefficients[6,2],
+                                -summary(Ba_rad_1km)$coefficients[7,2],
+                                -summary(Sr_rad_1km)$coefficients[1,2],
+                                -summary(Sr_rad_1km)$coefficients[2,2],
+                                -summary(Sr_rad_1km)$coefficients[3,2],
+                                -summary(Sr_rad_1km)$coefficients[4,2],
+                                -summary(Sr_rad_1km)$coefficients[5,2],
+                                -summary(Sr_rad_1km)$coefficients[6,2],
+                                -summary(Sr_rad_1km)$coefficients[7,2]
+                                ),
+                      pval = c(summary(Ba_rad_1km)$coefficients[1,4],
+                                summary(Ba_rad_1km)$coefficients[2,4],
+                                summary(Ba_rad_1km)$coefficients[3,4],
+                                summary(Ba_rad_1km)$coefficients[4,4],
+                                summary(Ba_rad_1km)$coefficients[5,4],
+                                summary(Ba_rad_1km)$coefficients[6,4],
+                                summary(Ba_rad_1km)$coefficients[7,4],
+                                summary(Sr_rad_1km)$coefficients[1,4],
+                                summary(Sr_rad_1km)$coefficients[2,4],
+                                summary(Sr_rad_1km)$coefficients[3,4],
+                                summary(Sr_rad_1km)$coefficients[4,4],
+                                summary(Sr_rad_1km)$coefficients[5,4],
+                                summary(Sr_rad_1km)$coefficients[6,4],
+                                summary(Sr_rad_1km)$coefficients[7,4]
+                                ))
+
+fe_rad_1km<-fe_rad_1km%>%
+  mutate(coef_max = coef + stderr,
+         coef_min = coef - stderr,
+         max_eff = conc * coef_max,
+         avg_eff = conc * coef,
+         min_eff = conc * coef_min,
+         significance = ifelse(pval < 0.05, "*", ""))
+
+#Plot
+ggplot(fe_rad_1km%>%
+         filter(var != "UOG"), 
+       aes(x = var, y = coef, color = species)) +
+        geom_hline(yintercept = 0, 
+                   colour = gray(1/2), lty = 2)+
+        #geom_hline(yintercept = 0, 
+        #           colour = gray(1/2), lty = 2) +
+        geom_point(aes(x = var, 
+                    y = coef), position = position_dodge(width = 0.5))+
+        geom_linerange(aes(x = var, 
+                     ymin = coef_min,
+                     ymax = coef_max), 
+                     position = position_dodge(width = 0.5))  + 
+        geom_text(data = fe_rad_1km%>%
+                    filter(species == "Ba",
+                           var != "UOG"), aes(x = var, 
+                               y = 0.52, 
+                                  label = significance),
+                  vjust = -0.5, size = 6) +
+        geom_text(data = fe_rad_1km%>%
+                    filter(species == "Sr",
+                           var != "UOG"), aes(x = var, 
+                               y = 0.55, 
+                                  label = significance),
+                  vjust = -0.5, size = 6) +
+        labs(x = "Variable",
+             y = "Coefficient") +
+        ylim(-0.2, 0.6) +
+        theme_classic()
+
+
+ggplot(fe_rad_1km, 
+       aes(x = var, y = avg_eff*1000, color = species)) +
+        geom_hline(yintercept = 0, 
+                   colour = gray(1/2), lty = 2)+
+        #geom_hline(yintercept = 0, 
+        #           colour = gray(1/2), lty = 2) +
+        geom_point(aes(x = var, 
+                    y = avg_eff*1000), 
+                   position = position_dodge(width = 0.5))+
+        geom_linerange(aes(x = var, 
+                     ymin = min_eff*1000,
+                     ymax = max_eff*1000), 
+                     position = position_dodge(width = 0.5))  + 
+        ggtitle("Average increase (ug/L)")+
+  labs(x = "Feature (1km radius)",
+       y = "Average increase (ug/L)")
+
+#write.csv(fe_rad_1km, "fe_rad_1km.csv")
+```

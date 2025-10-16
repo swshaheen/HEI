@@ -1,0 +1,338 @@
+Clear environment if needed
+```{r}
+rm(list = ls(all.names = TRUE))
+```
+
+Load tidyverse and BM packages
+```{r}
+library(tidyverse)
+library(brunnermunzel)
+```
+Read in dataset
+```{r}
+HEI<-read.csv("../../dataset/HEI_final_052824.csv")
+```
+
+Dataset prep
+```{r}
+#Modify the data to include variables for UOG wells within 1km, 3km, and create a censor code for 
+HEI <- HEI %>%
+  mutate(UOG_1km = ifelse(num_uncon_well_1km >= 1, 1, 0),
+         UOG_3km = ifelse(num_uncon_well_3km >= 1, 1, 0),
+         #Spill violations
+         Spill_1km = ifelse(num_spills_1km >= 1, 1, 0),
+         Spill_3km = ifelse(num_spills_3km >= 1, 1, 0),
+         )%>%
+  #Fix a few censor codes for NA samples that are reading as blank rather than NA
+  mutate(Ba_ugL_cc = case_when(Barium..total_cc == "" ~ NA,
+                               .default = Barium..total_cc),
+         Sr_ugL_cc = case_when(Strontium..total_cc == "" ~ NA,
+                               .default = Strontium..total_cc))%>%
+  #Add 0.0001 to all Sr samples to fix issues with 0s in historical samples
+  mutate(Strontium_mod = Strontium..total + 0.0001)
+
+#Create a ug/L column
+HEI$Ba_ugL <- HEI$Barium..total * 1000
+HEI$Sr_ugL <- HEI$Strontium..total * 1000
+HEI$Cl_ugL <- HEI$Chloride * 1000
+HEI$Br_ugL <- HEI$Bromide..total * 1000
+
+HEI_SWPA<-HEI%>%
+  filter(Region == "SWPA")
+
+HEI_NEPA <- HEI%>%
+  filter(Region != "SWPA" & Region != "NWPA")
+```
+
+WMW test, two sided
+```{r}
+y_names <- c("Ba_ugL", "Sr_ugL")
+x_names <- c("UOG_1km", "Spill_1km")
+
+datasets <- list("All_PA" = HEI, "SWPA" = HEI_SWPA, "NEPA" = HEI_NEPA)
+ 
+#Initialize an empty list to store the results for each y variable
+fullPA_results_list <- list()
+
+#Create a named list of formula strings for each y variable
+for (y_var in y_names) {
+  for (dataset_name in names(datasets)) {
+    dataset <- datasets[[dataset_name]]
+    
+    fullPA_results <- lapply(x_names, function(x_var) {
+      cat("x_var:", x_var, "\n")
+      cat("dataset_name:", dataset_name, "\n")
+      
+#Calculate the median of y for each category of the binary x variable
+      y1 <- dataset[dataset[[x_var]] == 1, y_var]
+      y2 <- dataset[dataset[[x_var]] == 0, y_var]
+#Calculate the median and quartiles (Q1 and Q3) of y for each category of the binary x variable
+      med1 <- median(y1, na.rm = TRUE)
+      y1_q1 <- quantile(y1, 0.25, na.rm = TRUE)
+      y1_q3 <- quantile(y1, 0.75, na.rm = TRUE)
+
+      med2 <- median(y2, na.rm = TRUE)
+      y2_q1 <- quantile(y2, 0.25, na.rm = TRUE)
+      y2_q3 <- quantile(y2, 0.75, na.rm = TRUE)
+
+      
+#Report the difference in medians along with the p-value from the Wilcoxon rank sum test
+      if (med1 > med2) {
+        cat("Median of", x_var, "= 1 is", med1, "and median of", 
+            x_var, "= 0 is", med2, "\n")
+      } else {
+        cat("Median of", x_var, "= 0 is", med2, "and median of", x_var, 
+            "= 1 is", med1, "\n")
+      }
+      test_result <- wilcox.test(y1, y2, na.action = na.exclude)
+      p_value <- test_result$p.value
+      cat("p-value:", p_value, "\n")
+      
+      data.frame(y_var = y_var, 
+                 x_var = x_var, 
+                 Region = dataset_name, 
+                 med1 = med1,
+                 med2 = med2,
+                 diff_med = med1 - med2,
+                 p_value = p_value,
+                 Q1_1 = y1_q1,
+                 Q3_1 = y1_q3,
+                 Q1_2 = y2_q1,
+                 Q3_2 = y2_q3)
+    })
+    
+#Combine the results into a single data frame and add it to the list of results for each y variable and dataset
+  fullPA_results_list[[paste0(y_var, "_", dataset_name)]] <- bind_rows(fullPA_results)
+  }
+}
+
+#Combine the results for each y variable and dataset into a single data frame
+fullPA_Wilcox_comp <- bind_rows(fullPA_results_list)
+
+fullPA_Wilcox_comp_twosided <- fullPA_Wilcox_comp%>% 
+  arrange(Region, y_var, x_var)%>%
+  mutate(Sig_95 = ifelse(p_value < 0.05, 1, 0),
+         Sig_99 = ifelse(p_value < 0.01, 1, 0),
+         Sig_99.5 = ifelse(p_value < 0.005, 1, 0))
+```
+
+ONE-SIDED TEST PVALUE
+WMW test
+```{r}
+y_names <- c("Ba_ugL", "Sr_ugL")
+x_names <- c("UOG_1km", "Spill_1km")
+
+datasets <- list("All_PA" = HEI, "SWPA" = HEI_SWPA, "NEPA" = HEI_NEPA)
+ 
+# Initialize an empty list to store the results for each y variable
+fullPA_results_list <- list()
+
+# Create a named list of formula strings for each y variable
+for (y_var in y_names) {
+  for (dataset_name in names(datasets)) {
+    dataset <- datasets[[dataset_name]]
+    
+    fullPA_results <- lapply(x_names, function(x_var) {
+      cat("x_var:", x_var, "\n")
+      cat("dataset_name:", dataset_name, "\n")
+      
+      # Calculate the median of y for each category of the binary x variable
+      y1 <- dataset[dataset[[x_var]] == 1, y_var]
+      y2 <- dataset[dataset[[x_var]] == 0, y_var]
+      # Calculate the median and quartiles (Q1 and Q3) of y for each category of the       binary x variable
+      med1 <- median(y1, na.rm = TRUE)
+      y1_q1 <- quantile(y1, 0.25, na.rm = TRUE)
+      y1_q3 <- quantile(y1, 0.75, na.rm = TRUE)
+
+      med2 <- median(y2, na.rm = TRUE)
+      y2_q1 <- quantile(y2, 0.25, na.rm = TRUE)
+      y2_q3 <- quantile(y2, 0.75, na.rm = TRUE)
+
+      
+      # Report the difference in medians along with the p-value from the Wilcoxon rank sum test
+      if (med1 > med2) {
+        cat("Median of", x_var, "= 1 is", med1, "and median of", x_var, "= 0 is", med2, "\n")
+      } else {
+        cat("Median of", x_var, "= 0 is", med2, "and median of", x_var, "= 1 is", med1, "\n")
+      }
+      test_result <- wilcox.test(y1, y2, na.action = na.exclude,
+                                 alternative = "greater")
+      p_value <- test_result$p.value
+      cat("p-value:", p_value, "\n")
+      
+      data.frame(y_var = y_var, 
+                 x_var = x_var, 
+                 Region = dataset_name, 
+                 med1 = med1,
+                 med2 = med2,
+                 diff_med = med1 - med2,
+                 p_value = p_value,
+                 Q1_1 = y1_q1,
+                 Q3_1 = y1_q3,
+                 Q1_2 = y2_q1,
+                 Q3_2 = y2_q3)
+    })
+    
+    # Combine the results into a single data frame and add it to the list of results for each y variable and dataset
+    fullPA_results_list[[paste0(y_var, "_", dataset_name)]] <- bind_rows(fullPA_results)
+  }
+}
+
+# Combine the results for each y variable and dataset into a single data frame
+fullPA_Wilcox_comp <- bind_rows(fullPA_results_list)
+
+fullPA_Wilcox_comp_onesided <- fullPA_Wilcox_comp%>% 
+  arrange(Region, y_var, x_var)%>%
+  mutate(Sig_95 = ifelse(p_value < 0.05, 1, 0),
+         Sig_99 = ifelse(p_value < 0.01, 1, 0),
+         Sig_99.5 = ifelse(p_value < 0.005, 1, 0))
+```
+
+BRUNNER-MUNZEL, twosided
+```{r}
+library(brunnermunzel)
+
+y_names <- c("Ba_ugL", "Sr_ugL", "Cl_ugL")
+x_names <- c("UOG_1km", "Spill_1km")
+
+datasets <- list("All_PA" = HEI, "SWPA" = HEI_SWPA, "NEPA" = HEI_NEPA)
+ 
+#Initialize an empty list to store the results for each y variable
+fullPA_results_list <- list()
+
+#Create a named list of formula strings for each y variable
+for (y_var in y_names) {
+  for (dataset_name in names(datasets)) {
+    dataset <- datasets[[dataset_name]]
+    
+    fullPA_results <- lapply(x_names, function(x_var) {
+      cat("x_var:", x_var, "\n")
+      cat("dataset_name:", dataset_name, "\n")
+      
+      #Calculate the median of y for each category of the binary x variable
+      y1 <- dataset[dataset[[x_var]] == 1, y_var]
+      y2 <- dataset[dataset[[x_var]] == 0, y_var]
+      #Calculate the median and quartiles (Q1 and Q3) of y for each 
+      #category of the binary x variable
+      med1 <- median(y1, na.rm = TRUE)
+      y1_q1 <- quantile(y1, 0.25, na.rm = TRUE)
+      y1_q3 <- quantile(y1, 0.75, na.rm = TRUE)
+
+      med2 <- median(y2, na.rm = TRUE)
+      y2_q1 <- quantile(y2, 0.25, na.rm = TRUE)
+      y2_q3 <- quantile(y2, 0.75, na.rm = TRUE)
+
+      
+      #Report the difference in medians along with the p-value from the
+      #Brunner-Munzel rank sum test
+      if (med1 > med2) {
+        cat("Median of", x_var, "= 1 is", med1, "and median of", 
+            x_var, "= 0 is", med2, "\n")
+      } else {
+        cat("Median of", x_var, "= 0 is", med2, "and median of", 
+            x_var, "= 1 is", med1, "\n")
+      }
+      test_result <- brunnermunzel.test(y1, y2, na.action = na.exclude)
+      p_value <- test_result$p.value
+      cat("p-value:", p_value, "\n")
+      
+      data.frame(y_var = y_var, 
+                 x_var = x_var, 
+                 Region = dataset_name, 
+                 med1 = med1,
+                 med2 = med2,
+                 diff_med = med1 - med2,
+                 p_value = p_value,
+                 Q1_1 = y1_q1,
+                 Q3_1 = y1_q3,
+                 Q1_2 = y2_q1,
+                 Q3_2 = y2_q3)
+    })
+    
+    # Combine the results into a single data frame and add it to the list of results for each y variable and dataset
+    fullPA_results_list[[paste0(y_var, "_", dataset_name)]] <- bind_rows(fullPA_results)
+  }
+}
+
+# Combine the results for each y variable and dataset into a single data frame
+fullPA_BM_comp <- bind_rows(fullPA_results_list)
+
+fullPA_BM_comp_twosided <- fullPA_BM_comp%>% 
+  arrange(Region, y_var, x_var)%>%
+  mutate(Sig_95 = ifelse(p_value < 0.05, 1, 0),
+         Sig_99 = ifelse(p_value < 0.01, 1, 0),
+         Sig_99.5 = ifelse(p_value < 0.005, 1, 0))
+```
+
+BRUNNER-MUNZEL, one sided
+```{r}
+y_names <- c("Ba_ugL", "Sr_ugL")
+x_names <- c("UOG_1km", "Spill_1km")
+
+datasets <- list("All_PA" = HEI, "SWPA" = HEI_SWPA, "NEPA" = HEI_NEPA)
+ 
+# Initialize an empty list to store the results for each y variable
+fullPA_results_list <- list()
+
+# Create a named list of formula strings for each y variable
+for (y_var in y_names) {
+  for (dataset_name in names(datasets)) {
+    dataset <- datasets[[dataset_name]]
+    
+    fullPA_results <- lapply(x_names, function(x_var) {
+      cat("x_var:", x_var, "\n")
+      cat("dataset_name:", dataset_name, "\n")
+      
+      # Calculate the median of y for each category of the binary x variable
+      y1 <- dataset[dataset[[x_var]] == 1, y_var]
+      y2 <- dataset[dataset[[x_var]] == 0, y_var]
+      # Calculate the median and quartiles (Q1 and Q3) of y for each category of the       binary x variable
+      med1 <- median(y1, na.rm = TRUE)
+      y1_q1 <- quantile(y1, 0.25, na.rm = TRUE)
+      y1_q3 <- quantile(y1, 0.75, na.rm = TRUE)
+
+      med2 <- median(y2, na.rm = TRUE)
+      y2_q1 <- quantile(y2, 0.25, na.rm = TRUE)
+      y2_q3 <- quantile(y2, 0.75, na.rm = TRUE)
+
+      
+      # Report the difference in medians along with the p-value from the Wilcoxon rank sum test
+      if (med1 > med2) {
+        cat("Median of", x_var, "= 1 is", med1, "and median of", x_var, "= 0 is", med2, "\n")
+      } else {
+        cat("Median of", x_var, "= 0 is", med2, "and median of", x_var, "= 1 is", med1, "\n")
+      }
+      test_result <- brunnermunzel.test(y1, y2, na.action = na.exclude,
+                                        alternative = "greater")
+      p_value <- test_result$p.value
+      cat("p-value:", p_value, "\n")
+      
+      data.frame(y_var = y_var, 
+                 x_var = x_var, 
+                 Region = dataset_name, 
+                 med1 = med1,
+                 med2 = med2,
+                 diff_med = med1 - med2,
+                 p_value = p_value,
+                 Q1_1 = y1_q1,
+                 Q3_1 = y1_q3,
+                 Q1_2 = y2_q1,
+                 Q3_2 = y2_q3)
+    })
+    
+    # Combine the results into a single data frame and add it to the list of results for each y variable and dataset
+    fullPA_results_list[[paste0(y_var, "_", dataset_name)]] <- bind_rows(fullPA_results)
+  }
+}
+
+# Combine the results for each y variable and dataset into a single data frame
+fullPA_BM_comp <- bind_rows(fullPA_results_list)
+
+fullPA_BM_comp_onesided <- fullPA_BM_comp%>% 
+  arrange(Region, y_var, x_var)%>%
+  mutate(Sig_95 = ifelse(p_value < 0.05, 1, 0),
+         Sig_99 = ifelse(p_value < 0.01, 1, 0),
+         Sig_99.5 = ifelse(p_value < 0.005, 1, 0))
+
+#write.csv(fullPA_BM_comp_onesided, "UOGD_medians_Brunner_comp_onesided.csv")
+```

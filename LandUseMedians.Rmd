@@ -1,0 +1,238 @@
+
+Load packages
+```{r}
+library(tidyverse)
+library(coin)
+library(lawstat)
+```
+
+Load groundwater dataset
+```{r}
+HEI <- read.csv("../../dataset/HEI_final_052824.csv", 
+                           stringsAsFactors = FALSE)
+```
+
+Sample land use classification
+```{r}
+##Classify samples based on proximity to UOGD, COGD, coal mining
+#Type 1 = UOGD, COGD, coal mining w/in 1km
+#Type 2 = UOGD, COGD w/ in 1km
+#Type 3 = UOGD, coal mining w/in 1km
+#Type 4 = UOGD w/in 1km
+#TYpe 5 = COGD, coal mining w/in 1km
+#Type 6 = COGD w/in 1km
+#Type 7 = coal mining w/in 1km
+#Type 8: none w/in 1km
+
+HEI<- HEI%>%
+  mutate(conwell_distance_m = conwell_distance_m_NEW,
+    HC_type_1km = case_when(
+    Coal_mine_distance_m <= 1000 & 
+    UCwell_distance_m <= 1000 & 
+    conwell_distance_m <= 1000 ~ "UOGD+COGD+CM",
+    Coal_mine_distance_m > 1000 &
+    UCwell_distance_m <= 1000 & 
+    conwell_distance_m <= 1000 ~ "UOGD+COGD",
+    Coal_mine_distance_m <= 1000 & 
+    UCwell_distance_m <= 1000 & 
+    conwell_distance_m > 1000 ~ "UOGD+CM",
+    Coal_mine_distance_m > 1000 & 
+    UCwell_distance_m <= 1000 & 
+    conwell_distance_m > 1000 ~ "UOGD",
+    Coal_mine_distance_m <= 1000 & 
+    UCwell_distance_m > 1000 & 
+    conwell_distance_m <= 1000 ~ "COGD+CM",
+    Coal_mine_distance_m > 1000 & 
+    UCwell_distance_m > 1000 & 
+    conwell_distance_m <= 1000 ~ "COGD",
+    Coal_mine_distance_m <= 1000 & 
+    UCwell_distance_m > 1000 & 
+    conwell_distance_m > 1000 ~ "CM",
+    Coal_mine_distance_m > 1000 & 
+    UCwell_distance_m > 1000 & 
+    conwell_distance_m > 1000 ~ "None")
+    )
+```
+
+Descriptive stats for samples >1km from hydrocarbon extraction for comparison to GWB outputs
+```{r}
+species_stats<-function(df, species){
+  results<-tibble(
+    Species = species,
+    Mean = mean(df[[species]], na.rm = T),
+    Median = median(df[[species]], na.rm = T),
+    StdDev = sd(df[[species]], na.rm = T),
+    Min = min(df[[species]], na.rm = T),
+    Q1 = quantile(df[[species]], 0.25, na.rm = T),
+    Q3 = quantile(df[[species]], 0.75, na.rm = T),
+    Max = max(df[[species]], na.rm = T)
+  )
+    
+  return(results)
+}
+
+
+results_list <- list()
+
+species_list<-c("Calcium..total", "Magnesium..total", "Sodium..total",
+                "Iron..total", "Sulfate..total", "Chloride",
+                "Alkalinity..bicarbonate")
+
+#Define samples with "None" land use category
+none_land_use <- HEI %>%
+  filter(Region == "SWPA")%>%
+  filter(HC_type_1km == "None")
+
+#Loop through each species
+for (species in species_list) {
+  # Apply species_stats function and store results in the list
+  results_list[[species]] <- species_stats(none_land_use, species)
+}
+
+#Combine results into a single tibble
+species_df <- bind_rows(results_list, .id = "Species")
+
+#Save csv
+write.csv(species_df, "Descriptive_stats_SWPA.csv", row.names = F)
+```
+
+Brunner-Munzel test, hydrocarbon land uses vs. controls
+```{r}
+#Specify the names of the species to test
+columns_to_test <- c( "Barium..total", "Calcium..total", "Chloride",
+                     "Sodium..total", "Strontium..total", "Sulfate..total")
+
+#Filter out the rows with "None" land use category
+none_land_use <- HEI %>%
+  filter(Region == "SWPA")%>%
+  filter(HC_type_1km == "None")
+
+#Create a new data frame to store the results
+results <- data.frame(Land_Use = character(),
+                      Column = character(),
+                      p_value = numeric(),
+                      Median_Land_Use = numeric(),
+                      Median_None = numeric(),
+                      stringsAsFactors = FALSE)
+
+#Iterate over the columns and perform the Wilcoxon rank sum test for each land use category
+for (column in columns_to_test) {
+  #Perform the Wilcoxon rank sum test for each land use category
+  for (land_use_category in setdiff(unique(HEI$HC_type_1km), "None")) {
+    #Filter out the rows for the current land use category
+    land_use <- HEI %>%
+      filter(Region == "SWPA",
+             HC_type_1km == land_use_category)
+    
+    #Filter out missing values from land_use and none_land_use
+    land_use <- land_use[complete.cases(land_use[[column]]), ]
+    none_land_use <- none_land_use[complete.cases(none_land_use[[column]]), ]
+    
+    #Check if there are enough observations for the Wilcoxon rank sum test
+    if (nrow(land_use) < 3 || nrow(none_land_use) < 3) {
+      warning("Not enough observations for the Wilcoxon rank sum test in column '", column, 
+              "' and land use '", land_use_category, "'. Skipping...")
+      next
+    }
+    
+#Perform the Wilcoxon rank sum test comparing the median of "None" category with the current land use category
+    test_result <- lawstat::brunner.munzel.test(none_land_use[[column]],
+                                             land_use[[column]])
+    
+    #Extract the p-value and calculate the medians
+    p_value <- test_result$p.value
+    median_land_use <- median(land_use[[column]])
+    median_none <- median(none_land_use[[column]])
+    
+    #Create a new row for the results data frame
+    result_row <- data.frame(Land_Use = land_use_category,
+                             Column = column,
+                             p_value = p_value,
+                             Median_Land_Use = median_land_use,
+                             Median_None = median_none)
+    
+    #Append the result row to the results data frame
+    results <- bind_rows(results, result_row)
+  }
+}
+
+#View the results
+print(results)
+
+results<-results%>%
+  mutate(Sig_95 = ifelse(p_value < 0.05, 1, 0),
+         Sig_99 = ifelse(p_value < 0.01, 1, 0),
+         Sig_99.5 = ifelse(p_value < 0.005, 1, 0))
+
+write.csv(results, "LandUseMedians_BM_May24.csv", row.names = F)
+```
+
+WMW test
+```{r}
+#Specify the names of the species to test
+columns_to_test <- c( "Barium..total", "Calcium..total", "Chloride",
+                     "Sodium..total", "Strontium..total", "Sulfate..total")
+
+#Filter out the rows with "None" land use category
+none_land_use <- HEI %>%
+  filter(Region == "SWPA")%>%
+  filter(HC_type_1km == "None")
+
+#Create a new data frame to store the results
+results <- data.frame(Land_Use = character(),
+                      Column = character(),
+                      p_value = numeric(),
+                      Median_Land_Use = numeric(),
+                      Median_None = numeric(),
+                      stringsAsFactors = FALSE)
+
+#Iterate over the columns and perform the Wilcoxon rank sum test for each land use category
+for (column in columns_to_test) {
+  #Perform the Wilcoxon rank sum test for each land use category
+  for (land_use_category in setdiff(unique(HEI$HC_type_1km), "None")) {
+    #Filter out the rows for the current land use category
+    land_use <- HEI %>%
+      filter(Region == "SWPA",
+             HC_type_1km == land_use_category)
+    
+    #Filter out missing values from land_use and none_land_use
+    land_use <- land_use[complete.cases(land_use[[column]]), ]
+    none_land_use <- none_land_use[complete.cases(none_land_use[[column]]), ]
+    
+    #Check if there are enough observations for the Wilcoxon rank sum test
+    if (nrow(land_use) < 3 || nrow(none_land_use) < 3) {
+      warning("Not enough observations for the Wilcoxon rank sum test in column '", column, "' and land use '", land_use_category, "'. Skipping...")
+      next
+    }
+    
+#Perform the Wilcoxon rank sum test comparing the median of "None" category with the current land use category
+    test_result <- wilcox.test(land_use[[column]], none_land_use[[column]],
+                               na.action = na.omit)
+    
+    #Extract the p-value and calculate the medians
+    p_value <- test_result$p.value
+    median_land_use <- median(land_use[[column]])
+    median_none <- median(none_land_use[[column]])
+    
+    #Create a new row for the results data frame
+    result_row <- data.frame(Land_Use = land_use_category,
+                             Column = column,
+                             p_value = p_value,
+                             Median_Land_Use = median_land_use,
+                             Median_None = median_none)
+    
+    #Append the result row to the results data frame
+    results <- bind_rows(results, result_row)
+  }
+}
+
+#View the results
+print(results)
+
+results<-results%>%
+  mutate(Sig_95 = ifelse(p_value < 0.05, 1, 0),
+         Sig_99 = ifelse(p_value < 0.01, 1, 0),
+         Sig_99.5 = ifelse(p_value < 0.005, 1, 0))
+
+write.csv(results, "LandUseMedians_May24.csv", row.names = F)
+```
